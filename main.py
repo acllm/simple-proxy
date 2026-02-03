@@ -187,9 +187,9 @@ def make_proxy_handler(config: _ProxyConfig):
     class ProxyHandler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
-        def log_message(self, fmt: str, *args) -> None:
+        def log_message(self, format: str, *args) -> None:
             if config.verbose:
-                super().log_message(fmt, *args)
+                super().log_message(format, *args)
 
         def _require_auth_if_needed(self) -> bool:
             if not config.auth_userpass:

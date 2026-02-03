@@ -1,0 +1,7 @@
+services:
+  proxy:
+    container_name: simple-proxy
+    image: simple-proxy:latest
+    network_mode: host
+    command: ["python", "main.py", "--listen", "::", "--port", "8080", "-v"]
+    restart: unless-stopped

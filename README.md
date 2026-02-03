@@ -76,6 +76,126 @@ export https_proxy=http://user:pass@<代理机IP>:8080
 - `--max-body`：最大请求体大小（默认 32MiB；用于限制转发大请求）
 - `-v/--verbose`：打开访问日志
 
+## 后台启动
+
+### 方式 1：nohup（临时后台运行）
+
+```bash
+nohup python3 main.py --listen :: --port 8080 --auth user:pass > proxy.log 2>&1 &
+```
+
+- 日志会输出到 `proxy.log`
+- 使用 `jobs` 查看后台任务
+- 使用 `kill <pid>` 停止进程
+
+### 方式 2：Docker（推荐）
+
+使用 docker-compose：
+
+```bash
+docker-compose up -d
+```
+
+或直接使用 Docker：
+
+```bash
+docker build -t simple-proxy .
+docker run -d -p 8080:8080 --name proxy simple-proxy --listen :: --port 8080 --auth user:pass
+```
+
+查看日志和管理：
+
+```bash
+docker-compose logs -f    # 查看日志
+docker-compose stop       # 停止服务
+docker-compose restart    # 重启服务
+```
+
+### 方式 3：macOS launchd（开机自启）
+
+创建 `~/Library/LaunchAgents/com.proxy.simple.plist`：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.proxy.simple</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/python3</string>
+        <string>/Users/YOUR_USERNAME/code-repos/simple-proxy/main.py</string>
+        <string>--listen</string>
+        <string>::</string>
+        <string>--port</string>
+        <string>8080</string>
+        <string>--auth</string>
+        <string>user:pass</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/proxy.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/proxy.err</string>
+</dict>
+</plist>
+```
+
+加载并启动服务：
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.proxy.simple.plist
+launchctl start com.proxy.simple
+```
+
+停止和卸载：
+
+```bash
+launchctl stop com.proxy.simple
+launchctl unload ~/Library/LaunchAgents/com.proxy.simple.plist
+```
+
+### 方式 4：Linux systemd（开机自启）
+
+创建 `/etc/systemd/system/simple-proxy.service`：
+
+```ini
+[Unit]
+Description=Simple HTTP Proxy
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/simple-proxy
+ExecStart=/usr/bin/python3 main.py --listen :: --port 8080 --auth user:pass
+Restart=on-failure
+StandardOutput=append:/var/log/simple-proxy.log
+StandardError=append:/var/log/simple-proxy.err
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启用并启动服务：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable simple-proxy
+sudo systemctl start simple-proxy
+```
+
+查看状态和日志：
+
+```bash
+sudo systemctl status simple-proxy
+sudo journalctl -u simple-proxy -f
+```
+
 ## 工作方式说明
 
 - HTTP：代理会将请求转发到上游站点并把响应返回给客户端。

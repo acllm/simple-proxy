@@ -1,0 +1,17 @@
+.git
+.gitignore
+.python-version
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.coverage
+README.md
+CLAUDE.md
+uv.lock
+pyproject.toml
+docker-compose.yml
+Dockerfile
+.dockerignore
