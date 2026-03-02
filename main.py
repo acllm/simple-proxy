@@ -1,3 +1,6 @@
+from __future__ import annotations
+from typing import Optional, Tuple, List, Dict
+
 import argparse
 import base64
 import http.client
@@ -22,7 +25,7 @@ HOP_BY_HOP_HEADERS = {
 }
 
 
-def _parse_host_port(target: str, default_port: int) -> tuple[str, int]:
+def _parse_host_port(target: str, default_port: int) -> Tuple[str, int]:
     target = target.strip()
     if target.startswith("["):
         # IPv6: [2001:db8::1]:443
@@ -80,7 +83,7 @@ def _read_chunked(rfile, max_size: int) -> bytes:
     return bytes(body)
 
 
-def _basic_auth_ok(header_value: str | None, expected_userpass: str) -> bool:
+def _basic_auth_ok(header_value: Optional[str], expected_userpass: str) -> bool:
     if not header_value:
         return False
     try:
@@ -99,7 +102,7 @@ class _ProxyConfig:
         listen: str,
         port: int,
         timeout: float,
-        auth_userpass: str | None,
+        auth_userpass: Optional[str],
         max_body: int,
         verbose: bool,
     ) -> None:
@@ -133,12 +136,12 @@ def _is_ipv4_literal(addr: str) -> bool:
         return False
 
 
-def _guess_primary_local_ip(family: int) -> str | None:
+def _guess_primary_local_ip(family: int) -> Optional[str]:
     """Best-effort: pick the local IP used for an outbound route.
 
     This does not send any packets; it only asks the OS for routing decision.
     """
-    s: socket.socket | None = None
+    s: Optional[socket.socket] = None
     try:
         if family == socket.AF_INET6:
             dest = ("2001:4860:4860::8888", 80, 0, 0)
@@ -168,7 +171,7 @@ def _print_listen_hints(listen_addr: str, port: int) -> None:
     print(f"HTTP Proxy listening on {bind_show}:{port}", flush=True)
 
     # If listening on wildcard, also show best-effort concrete addresses.
-    hints: list[str] = []
+    hints: List[str] = []
     if listen_addr in {"0.0.0.0", "::"}:
         v4 = _guess_primary_local_ip(socket.AF_INET)
         v6 = _guess_primary_local_ip(socket.AF_INET6)
@@ -210,10 +213,10 @@ def make_proxy_handler(config: _ProxyConfig):
             tokens = [t.strip().lower() for t in val.split(",") if t.strip()]
             return set(tokens)
 
-        def _filtered_request_headers(self, host: str) -> dict[str, str]:
+        def _filtered_request_headers(self, host: str) -> Dict[str, str]:
             connection_tokens = self._connection_header_tokens()
             drop = set(HOP_BY_HOP_HEADERS) | connection_tokens
-            out: dict[str, str] = {}
+            out: Dict[str, str] = {}
             for k, v in self.headers.items():
                 lk = k.lower()
                 if lk in drop:
@@ -246,7 +249,7 @@ def make_proxy_handler(config: _ProxyConfig):
             path = raw_path or "/"
             return scheme, host, port, path, host_header
 
-        def _read_request_body(self) -> bytes | None:
+        def _read_request_body(self) -> Optional[bytes]:
             te = (self.headers.get("Transfer-Encoding") or "").lower()
             if "chunked" in te:
                 return _read_chunked(self.rfile, config.max_body)
@@ -287,7 +290,7 @@ def make_proxy_handler(config: _ProxyConfig):
                 self._send_upstream_error(400, str(e))
                 return
 
-            conn: http.client.HTTPConnection | None = None
+            conn: Optional[http.client.HTTPConnection] = None
             try:
                 if scheme == "https":
                     conn = http.client.HTTPSConnection(host, port, timeout=config.timeout)
@@ -369,7 +372,7 @@ def make_proxy_handler(config: _ProxyConfig):
                 self.send_error(400, "invalid CONNECT target")
                 return
 
-            upstream: socket.socket | None = None
+            upstream: Optional[socket.socket] = None
             try:
                 upstream = socket.create_connection((host, port), timeout=config.timeout)
                 self.send_response(200, "Connection Established")
