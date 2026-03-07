@@ -1,5 +1,4 @@
 from __future__ import annotations
-from typing import Optional, Tuple, List, Dict
 
 import argparse
 import base64
@@ -12,7 +11,7 @@ import socketserver
 import threading
 import time
 import urllib.parse
-
+from typing import Dict, List, Optional, Tuple
 
 HOP_BY_HOP_HEADERS = {
     "connection",
@@ -248,7 +247,9 @@ def make_proxy_handler(config: _ProxyConfig):
         def _require_auth_if_needed(self) -> bool:
             if not config.auth_userpass:
                 return True
-            if _basic_auth_ok(self.headers.get("Proxy-Authorization"), config.auth_userpass):
+            if _basic_auth_ok(
+                self.headers.get("Proxy-Authorization"), config.auth_userpass
+            ):
                 return True
             self.send_response(407, "Proxy Authentication Required")
             self.send_header("Proxy-Authenticate", 'Basic realm="simple-proxy"')
@@ -344,9 +345,13 @@ def make_proxy_handler(config: _ProxyConfig):
             conn: Optional[http.client.HTTPConnection] = None
             try:
                 if scheme == "https":
-                    conn = http.client.HTTPSConnection(host, port, timeout=config.timeout)
+                    conn = http.client.HTTPSConnection(
+                        host, port, timeout=config.timeout
+                    )
                 else:
-                    conn = http.client.HTTPConnection(host, port, timeout=config.timeout)
+                    conn = http.client.HTTPConnection(
+                        host, port, timeout=config.timeout
+                    )
                 conn.request(self.command, path, body=body, headers=headers)
                 resp = conn.getresponse()
 
@@ -359,7 +364,10 @@ def make_proxy_handler(config: _ProxyConfig):
                     lk = k.lower()
                     if lk in HOP_BY_HOP_HEADERS:
                         continue
-                    if upstream_chunked and lk in {"transfer-encoding", "content-length"}:
+                    if upstream_chunked and lk in {
+                        "transfer-encoding",
+                        "content-length",
+                    }:
                         continue
                     self.send_header(k, v)
                 self.send_header("Connection", "close")
@@ -425,7 +433,9 @@ def make_proxy_handler(config: _ProxyConfig):
 
             upstream: Optional[socket.socket] = None
             try:
-                upstream = socket.create_connection((host, port), timeout=config.timeout)
+                upstream = socket.create_connection(
+                    (host, port), timeout=config.timeout
+                )
                 self.send_response(200, "Connection Established")
                 self.send_header("Connection", "close")
                 self.end_headers()
@@ -488,12 +498,15 @@ class ProxyServer:
     def _create_server_class(self) -> type:
         """Create appropriate server class based on address family."""
         if self.ipv6:
+
             class ThreadingTCPServerV6(socketserver.ThreadingTCPServer):
                 address_family = socket.AF_INET6
 
                 def server_bind(self) -> None:
                     try:
-                        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                        self.socket.setsockopt(
+                            socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0
+                        )
                     except OSError:
                         pass
                     return super().server_bind()
@@ -563,18 +576,26 @@ class AddressMonitor:
 
     def _try_rebind(self) -> bool:
         """Attempt to rebind to an available address."""
-        print(f"\n[AddressMonitor] Current address {self.server.address} is unavailable, attempting rebind...")
+        print(
+            f"\n[AddressMonitor] Current address {self.server.address} is unavailable, attempting rebind..."
+        )
 
         # First, try to bind to the original address
-        if check_address_available(self.original_address, self.server.port, self.check_timeout):
-            print(f"[AddressMonitor] Rebinding to original address: {self.original_address}")
+        if check_address_available(
+            self.original_address, self.server.port, self.check_timeout
+        ):
+            print(
+                f"[AddressMonitor] Rebinding to original address: {self.original_address}"
+            )
             try:
                 self.server.restart(self.original_address)
                 self.last_rebind_time = time.time()
                 _print_listen_hints(self.original_address, self.server.port)
                 return True
             except OSError as e:
-                print(f"[AddressMonitor] Failed to bind to {self.original_address}: {e}")
+                print(
+                    f"[AddressMonitor] Failed to bind to {self.original_address}: {e}"
+                )
 
         # If original address fails, auto-detect
         new_address = auto_detect_address(self.server.port, self.check_timeout)
@@ -593,7 +614,9 @@ class AddressMonitor:
 
     def run(self) -> None:
         """Background monitoring loop."""
-        print(f"[AddressMonitor] Started, checking every {self.check_interval}s with {self.check_timeout}s timeout")
+        print(
+            f"[AddressMonitor] Started, checking every {self.check_interval}s with {self.check_timeout}s timeout"
+        )
 
         while not self.stop_event.is_set():
             self.stop_event.wait(self.check_interval)
@@ -602,11 +625,15 @@ class AddressMonitor:
                 break
 
             # Check if current address is available
-            if not check_address_available(self.server.address, self.server.port, self.check_timeout):
+            if not check_address_available(
+                self.server.address, self.server.port, self.check_timeout
+            ):
                 if self._can_rebind():
                     self._try_rebind()
                 else:
-                    print(f"[AddressMonitor] {self.server.address} unavailable, but waiting {self.min_rebind_interval}s before rebind")
+                    print(
+                        f"[AddressMonitor] {self.server.address} unavailable, but waiting {self.min_rebind_interval}s before rebind"
+                    )
 
     def stop(self) -> None:
         """Stop: the monitor."""
@@ -648,7 +675,9 @@ def run_proxy(config: _ProxyConfig) -> None:
 
 
 def _parse_args() -> _ProxyConfig:
-    p = argparse.ArgumentParser(description="Simple forward HTTP proxy (supports CONNECT)")
+    p = argparse.ArgumentParser(
+        description="Simple forward HTTP proxy (supports CONNECT)"
+    )
     p.add_argument(
         "--listen",
         default="127.0.0.1",
