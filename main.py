@@ -539,33 +539,112 @@ class ProxyServer:
             return self.server is not None
 
 
+class AddressMonitor:
+    """Monitor address availability and trigger rebinds."""
+
+    def __init__(
+        self,
+        server: ProxyServer,
+        check_interval: float = 10.0,
+        check_timeout: float = 2.0,
+        original_address: str = "",
+    ) -> None:
+        self.server = server
+        self.check_interval = check_interval
+        self.check_timeout = check_timeout
+        self.original_address = original_address or server.address
+        self.last_rebind_time = 0.0
+        self.min_rebind_interval = 30.0  # Prevent rapid rebind loops
+        self.stop_event = threading.Event()
+
+    def _can_rebind(self) -> bool:
+        """Check if enough time has passed since last rebind."""
+        return (time.time() - self.last_rebind_time) >= self.min_rebind_interval
+
+    def _try_rebind(self) -> bool:
+        """Attempt to rebind to an available address."""
+        print(f"\n[AddressMonitor] Current address {self.server.address} is unavailable, attempting rebind...")
+
+        # First, try to bind to the original address
+        if check_address_available(self.original_address, self.server.port, self.check_timeout):
+            print(f"[AddressMonitor] Rebinding to original address: {self.original_address}")
+            try:
+                self.server.restart(self.original_address)
+                self.last_rebind_time = time.time()
+                _print_listen_hints(self.original_address, self.server.port)
+                return True
+            except OSError as e:
+                print(f"[AddressMonitor] Failed to bind to {self.original_address}: {e}")
+
+        # If original address fails, auto-detect
+        new_address = auto_detect_address(self.server.port, self.check_timeout)
+        if new_address:
+            print(f"[AddressMonitor] Auto-detected available address: {new_address}")
+            try:
+                self.server.restart(new_address)
+                self.last_rebind_time = time.time()
+                _print_listen_hints(new_address, self.server.port)
+                return True
+            except OSError as e:
+                print(f"[AddressMonitor] Failed to bind to {new_address}: {e}")
+
+        print("[AddressMonitor] No available address found, will retry later")
+        return False
+
+    def run(self) -> None:
+        """Background monitoring loop."""
+        print(f"[AddressMonitor] Started, checking every {self.check_interval}s with {self.check_timeout}s timeout")
+
+        while not self.stop_event.is_set():
+            self.stop_event.wait(self.check_interval)
+
+            if self.stop_event.is_set():
+                break
+
+            # Check if current address is available
+            if not check_address_available(self.server.address, self.server.port, self.check_timeout):
+                if self._can_rebind():
+                    self._try_rebind()
+                else:
+                    print(f"[AddressMonitor] {self.server.address} unavailable, but waiting {self.min_rebind_interval}s before rebind")
+
+    def stop(self) -> None:
+        """Stop: the monitor."""
+        self.stop_event.set()
+
+
 def run_proxy(config: _ProxyConfig) -> None:
     handler_class = make_proxy_handler(config)
     listen_addr = _normalize_listen_addr(config.listen)
-    server_address = (listen_addr, config.port)
-    # allow fast restart
+    is_ipv6 = _is_ipv6_literal(listen_addr)
 
-    server_cls = socketserver.ThreadingTCPServer
-    if _is_ipv6_literal(listen_addr):
-        class ThreadingTCPServerV6(socketserver.ThreadingTCPServer):
-            address_family = socket.AF_INET6
+    # Create server wrapper
+    server = ProxyServer(handler_class, listen_addr, config.port, is_ipv6)
 
-            def server_bind(self) -> None:
-                # Best-effort dual-stack (accept IPv4-mapped) when binding to ::
-                try:
-                    self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-                except OSError:
-                    pass
-                return super().server_bind()
+    # Start server
+    server.start()
+    _print_listen_hints(listen_addr, config.port)
+    if config.auth_userpass:
+        print("Auth enabled: Basic", flush=True)
 
-        server_cls = ThreadingTCPServerV6
+    # Create and start address monitor
+    monitor = AddressMonitor(
+        server=server,
+        check_interval=config.monitor_interval,
+        check_timeout=config.monitor_timeout,
+        original_address=listen_addr,
+    )
+    monitor_thread = threading.Thread(target=monitor.run, daemon=True)
+    monitor_thread.start()
 
-    server_cls.allow_reuse_address = True
-    with server_cls(server_address, handler_class) as httpd:
-        _print_listen_hints(listen_addr, config.port)
-        if config.auth_userpass:
-            print("Auth enabled: Basic", flush=True)
-        httpd.serve_forever()
+    # Wait for shutdown signal
+    try:
+        monitor_thread.join()
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        monitor.stop()
+        server.stop()
+        monitor_thread.join(timeout=2.0)
 
 
 def _parse_args() -> _ProxyConfig:
