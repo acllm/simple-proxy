@@ -8,3 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+
+
+# Claude superpowers
+docs/plans
+.claude

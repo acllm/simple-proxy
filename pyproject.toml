@@ -11,3 +11,9 @@ dependencies = [
 [[tool.uv.index]]
 url = "https://bytedpypi.byted.org/simple/"
 default = true
+
+[dependency-groups]
+dev = [
+    "black>=25.11.0",
+    "isort>=6.1.0",
+]
