@@ -165,6 +165,28 @@ def _guess_primary_local_ip(family: int) -> Optional[str]:
             pass
 
 
+def check_address_available(address: str, port: int, timeout: float) -> bool:
+    """Check if an address is available for binding.
+
+    Returns True if we can bind to this address (port is not in use or address is reachable).
+    Returns False if the address is not reachable or times out.
+    """
+    try:
+        # Try to connect to see if address is reachable
+        test_socket = socket.create_connection((address, port), timeout=timeout)
+        test_socket.close()
+        # Connection successful means address is reachable but port might be in use
+        # We can't bind if port is already bound by us or another process
+        return False
+    except ConnectionRefusedError:
+        # Connection refused means address is reachable but port is not bound
+        # This is expected - we can bind to this address
+        return True
+    except (socket.timeout, socket.gaierror, OSError):
+        # Timeout, DNS error, or other network error means address is not available
+        return False
+
+
 def _format_host_for_url(host: str) -> str:
     return f"[{host}]" if _is_ipv6_literal(host) else host
 
