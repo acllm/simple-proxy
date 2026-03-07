@@ -168,14 +168,14 @@ def _guess_primary_local_ip(family: int) -> Optional[str]:
 def check_address_available(address: str, port: int, timeout: float) -> bool:
     """Check if an address is available for binding.
 
-    Returns True if we can bind to this address (port is not in use or address is reachable).
-    Returns False if the address is not reachable or times out.
+    Returns True if the address is reachable and port is not in use.
+    Returns False if the address is unreachable or port is already in use.
     """
     try:
-        # Try to connect to see if address is reachable
+        # Try to connect to see if address is reachable and port status
         test_socket = socket.create_connection((address, port), timeout=timeout)
         test_socket.close()
-        # Connection successful means address is reachable but port might be in use
+        # Connection successful means address is reachable but port is in use
         # We can't bind if port is already bound by us or another process
         return False
     except ConnectionRefusedError:
@@ -185,6 +185,29 @@ def check_address_available(address: str, port: int, timeout: float) -> bool:
     except (socket.timeout, socket.gaierror, OSError):
         # Timeout, DNS error, or other network error means address is not available
         return False
+
+
+def auto_detect_address(port: int, timeout: float) -> Optional[str]:
+    """Auto-detect an available local address.
+
+    Tries common addresses in order:
+    1. 127.0.0.1 (loopback)
+    2. 0.0.0.0 (wildcard)
+    3. Primary IPv4 from routing table
+
+    Returns the first available address, or None if none found.
+    """
+    # Try common addresses
+    for candidate in ["127.0.0.1", "0.0.0.0"]:
+        if check_address_available(candidate, port, timeout):
+            return candidate
+
+    # Try to get system's primary IP
+    primary_ip = _guess_primary_local_ip(socket.AF_INET)
+    if primary_ip and check_address_available(primary_ip, port, timeout):
+        return primary_ip
+
+    return None
 
 
 def _format_host_for_url(host: str) -> str:
