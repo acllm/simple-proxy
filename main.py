@@ -105,6 +105,8 @@ class _ProxyConfig:
         auth_userpass: Optional[str],
         max_body: int,
         verbose: bool,
+        monitor_interval: float = 10.0,
+        monitor_timeout: float = 2.0,
     ) -> None:
         self.listen = listen
         self.port = port
@@ -112,6 +114,8 @@ class _ProxyConfig:
         self.auth_userpass = auth_userpass
         self.max_body = max_body
         self.verbose = verbose
+        self.monitor_interval = monitor_interval
+        self.monitor_timeout = monitor_timeout
 
 
 def _normalize_listen_addr(addr: str) -> str:
@@ -466,6 +470,18 @@ def _parse_args() -> _ProxyConfig:
         help="max request body size in bytes (default: 32MiB)",
     )
     p.add_argument("-v", "--verbose", action="store_true", help="enable access log")
+    p.add_argument(
+        "--monitor-interval",
+        type=float,
+        default=10.0,
+        help="address availability check interval in seconds (default: 10.0)",
+    )
+    p.add_argument(
+        "--monitor-timeout",
+        type=float,
+        default=2.0,
+        help="address detection timeout in seconds (default: 2.0)",
+    )
     args = p.parse_args()
     return _ProxyConfig(
         listen=_normalize_listen_addr(args.listen),
@@ -474,6 +490,8 @@ def _parse_args() -> _ProxyConfig:
         auth_userpass=args.auth,
         max_body=args.max_body,
         verbose=args.verbose,
+        monitor_interval=args.monitor_interval,
+        monitor_timeout=args.monitor_timeout,
     )
 
 
