@@ -9,6 +9,8 @@ import ipaddress
 import select
 import socket
 import socketserver
+import threading
+import time
 import urllib.parse
 
 
@@ -463,6 +465,78 @@ def make_proxy_handler(config: _ProxyConfig):
             self._handle_http_method()
 
     return ProxyHandler
+
+
+class ProxyServer:
+    """Server wrapper that supports dynamic restart."""
+
+    def __init__(
+        self,
+        handler_class,
+        address: str,
+        port: int,
+        ipv6: bool = False,
+    ) -> None:
+        self.handler_class = handler_class
+        self.address = address
+        self.port = port
+        self.ipv6 = ipv6
+        self.server: Optional[socketserver.BaseServer] = None
+        self.server_cls = self._create_server_class()
+        self.lock = threading.Lock()
+
+    def _create_server_class(self) -> type:
+        """Create appropriate server class based on address family."""
+        if self.ipv6:
+            class ThreadingTCPServerV6(socketserver.ThreadingTCPServer):
+                address_family = socket.AF_INET6
+
+                def server_bind(self) -> None:
+                    try:
+                        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                    except OSError:
+                        pass
+                    return super().server_bind()
+
+            return ThreadingTCPServerV6
+        return socketserver.ThreadingTCPServer
+
+    def start(self) -> None:
+        """Start the server."""
+        with self.lock:
+            if self.server is not None:
+                return  # Already running
+
+            self.server_cls.allow_reuse_address = True
+            server_address = (self.address, self.port)
+            self.server = self.server_cls(server_address, self.handler_class)
+
+            # Start server in a separate thread
+            thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+            thread.start()
+            self.server_thread = thread
+
+    def stop(self) -> None:
+        """Stop the server."""
+        with self.lock:
+            if self.server is None:
+                return  # Already stopped
+
+            self.server.shutdown()
+            self.server.server_close()
+            self.server = None
+
+    def restart(self, new_address: str) -> None:
+        """Restart the server with a new listening address."""
+        with self.lock:
+            self.stop()
+            self.address = new_address
+            self.start()
+
+    def is_running(self) -> bool:
+        """Check if server is running."""
+        with self.lock:
+            return self.server is not None
 
 
 def run_proxy(config: _ProxyConfig) -> None:
