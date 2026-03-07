@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ctypes
+import ctypes.util
 import http.client
 import http.server
 import ipaddress
 import select
 import socket
 import socketserver
+import struct
 import threading
 import time
 import urllib.parse
@@ -211,6 +214,148 @@ def auto_detect_address(port: int, timeout: float) -> Optional[str]:
     return None
 
 
+def get_all_local_addresses() -> List[str]:
+    """Get all available local IP addresses.
+
+    Returns a list of all available local IP addresses, including IPv4 and IPv6.
+    Always includes loopback addresses. Does not require external network access.
+    """
+    addresses = set()
+    
+    # Method 1: Try parsing ifconfig output (most reliable on macOS)
+    try:
+        import subprocess
+        import re
+        
+        # Run ifconfig command
+        result = subprocess.run(
+            ["ifconfig"],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        
+        if result.returncode == 0:
+            output = result.stdout
+            
+            # Parse IPv4 addresses (inet)
+            ipv4_pattern = r'inet\s+(\d+\.\d+\.\d+\.\d+)'
+            for match in re.finditer(ipv4_pattern, output):
+                addr = match.group(1)
+                if addr:
+                    addresses.add(addr)
+            
+            # Parse IPv6 addresses (inet6, skip link-local)
+            ipv6_pattern = r'inet6\s+([0-9a-fA-F:.]+)'
+            for match in re.finditer(ipv6_pattern, output):
+                addr = match.group(1)
+                if addr and not addr.startswith("fe80:"):
+                    addresses.add(addr)
+    except Exception:
+        pass
+    
+    # Method 2: Try parsing ip addr output (for Linux compatibility)
+    if not addresses:
+        try:
+            import subprocess
+            import re
+            
+            result = subprocess.run(
+                ["ip", "addr"],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            
+            if result.returncode == 0:
+                output = result.stdout
+                
+                # Parse IPv4 addresses
+                ipv4_pattern = r'inet\s+(\d+\.\d+\.\d+\.\d+)/\d+'
+                for match in re.finditer(ipv4_pattern, output):
+                    addr = match.group(1)
+                    if addr:
+                        addresses.add(addr)
+                
+                # Parse IPv6 addresses
+                ipv6_pattern = r'inet6\s+([0-9a-fA-F:.]+)/\d+'
+                for match in re.finditer(ipv6_pattern, output):
+                    addr = match.group(1)
+                    if addr and not addr.startswith("fe80:"):
+                        addresses.add(addr)
+        except Exception:
+            pass
+    
+    # Fallback 1: Get addresses from hostname resolution
+    if not addresses:
+        try:
+            hostname = socket.gethostname()
+            for addrinfo in socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM):
+                addr = addrinfo[4][0]
+                if addr:
+                    addresses.add(addr)
+        except Exception:
+            pass
+    
+    # Fallback 2: Try to get addresses by connecting to common gateways
+    # We use a timeout and don't actually send any data
+    if not addresses or len(addresses) <= 2:  # Only if we have very few addresses
+        for family, dest in [
+            (socket.AF_INET, ("1.1.1.1", 53)),
+            (socket.AF_INET, ("8.8.8.8", 53)),
+            (socket.AF_INET6, ("2606:4700:4700::1111", 53, 0, 0)),
+            (socket.AF_INET6, ("2001:4860:4860::8888", 53, 0, 0)),
+        ]:
+            try:
+                s = socket.socket(family, socket.SOCK_DGRAM)
+                s.settimeout(0.1)  # Very short timeout
+                s.connect(dest)
+                addr = s.getsockname()[0]
+                if addr:
+                    addresses.add(addr)
+                s.close()
+            except Exception:
+                pass
+    
+    # Always add loopback addresses
+    addresses.add("127.0.0.1")
+    addresses.add("::1")
+    
+    # Filter out unwanted addresses
+    filtered = []
+    for addr in addresses:
+        if addr.startswith("fe80:"):
+            # Skip link-local IPv6 unless specifically needed
+            continue
+        if addr in {"0.0.0.0", "::"}:
+            # Skip wildcard addresses
+            continue
+        filtered.append(addr)
+    
+    return filtered
+
+
+def detect_address_changes(
+    old_addresses: List[str], new_addresses: List[str]
+) -> Tuple[List[str], List[str]]:
+    """Detect changes between two sets of addresses.
+
+    Args:
+        old_addresses: Previous list of addresses
+        new_addresses: Current list of addresses
+
+    Returns:
+        A tuple of (added_addresses, removed_addresses)
+    """
+    old_set = set(old_addresses)
+    new_set = set(new_addresses)
+
+    added = list(new_set - old_set)
+    removed = list(old_set - new_set)
+
+    return added, removed
+
+
 def _format_host_for_url(host: str) -> str:
     return f"[{host}]" if _is_ipv6_literal(host) else host
 
@@ -220,18 +365,35 @@ def _print_listen_hints(listen_addr: str, port: int) -> None:
     bind_show = _format_host_for_url(listen_addr)
     print(f"HTTP Proxy listening on {bind_show}:{port}", flush=True)
 
-    # If listening on wildcard, also show best-effort concrete addresses.
+    # If listening on wildcard, also show all available local addresses.
     hints: List[str] = []
     if listen_addr in {"0.0.0.0", "::"}:
-        v4 = _guess_primary_local_ip(socket.AF_INET)
-        v6 = _guess_primary_local_ip(socket.AF_INET6)
-        if v4:
-            hints.append(f"http://{v4}:{port}")
-        if v6:
-            hints.append(f"http://[{v6}]:{port}")
+        # Get all available local addresses
+        all_addresses = get_all_local_addresses()
+        
+        # Separate IPv4 and IPv6 for better display
+        ipv4_addrs = []
+        ipv6_addrs = []
+        
+        for addr in all_addresses:
+            if addr == "127.0.0.1" or addr == "::1":
+                # Skip loopback addresses in hints (users usually know these)
+                continue
+            if _is_ipv6_literal(addr):
+                ipv6_addrs.append(addr)
+            else:
+                ipv4_addrs.append(addr)
+        
+        # Add IPv4 addresses
+        for addr in ipv4_addrs:
+            hints.append(f"http://{addr}:{port}")
+        
+        # Add IPv6 addresses
+        for addr in ipv6_addrs:
+            hints.append(f"http://[{addr}]:{port}")
 
     if hints:
-        print("可用访问地址（根据本机路由推断）：", flush=True)
+        print("可用访问地址：", flush=True)
         for u in hints:
             print(f"  - {u}", flush=True)
 
@@ -569,6 +731,8 @@ class AddressMonitor:
         self.last_rebind_time = 0.0
         self.min_rebind_interval = 30.0  # Prevent rapid rebind loops
         self.stop_event = threading.Event()
+        self._is_wildcard = self.server.address in {"::", "0.0.0.0"}
+        self._last_known_addresses: Optional[List[str]] = None
 
     def _can_rebind(self) -> bool:
         """Check if enough time has passed since last rebind."""
@@ -612,11 +776,44 @@ class AddressMonitor:
         print("[AddressMonitor] No available address found, will retry later")
         return False
 
+    def _check_wildcard_changes(self) -> bool:
+        """Check for address changes in wildcard mode."""
+        current_addresses = get_all_local_addresses()
+        
+        if self._last_known_addresses is None:
+            self._last_known_addresses = current_addresses
+            return False
+        
+        added, removed = detect_address_changes(self._last_known_addresses, current_addresses)
+        
+        if added or removed:
+            print(f"\n[AddressMonitor] Detected network address changes:")
+            if added:
+                print(f"  Added addresses: {', '.join(added)}")
+            if removed:
+                print(f"  Removed addresses: {', '.join(removed)}")
+            
+            self._last_known_addresses = current_addresses
+            _print_listen_hints(self.server.address, self.server.port)
+            return True
+        
+        return False
+
     def run(self) -> None:
         """Background monitoring loop."""
         print(
             f"[AddressMonitor] Started, checking every {self.check_interval}s with {self.check_timeout}s timeout"
         )
+
+        if self._is_wildcard:
+            print(
+                f"[AddressMonitor] Monitoring network addresses for wildcard '{self.server.address}'"
+            )
+            self._last_known_addresses = get_all_local_addresses()
+        else:
+            print(
+                f"[AddressMonitor] Monitoring specific address '{self.server.address}'"
+            )
 
         while not self.stop_event.is_set():
             self.stop_event.wait(self.check_interval)
@@ -624,16 +821,19 @@ class AddressMonitor:
             if self.stop_event.is_set():
                 break
 
-            # Check if current address is available
-            if not check_address_available(
-                self.server.address, self.server.port, self.check_timeout
-            ):
-                if self._can_rebind():
-                    self._try_rebind()
-                else:
-                    print(
-                        f"[AddressMonitor] {self.server.address} unavailable, but waiting {self.min_rebind_interval}s before rebind"
-                    )
+            if self._is_wildcard:
+                self._check_wildcard_changes()
+            else:
+                # Check if current address is available
+                if not check_address_available(
+                    self.server.address, self.server.port, self.check_timeout
+                ):
+                    if self._can_rebind():
+                        self._try_rebind()
+                    else:
+                        print(
+                            f"[AddressMonitor] {self.server.address} unavailable, but waiting {self.min_rebind_interval}s before rebind"
+                        )
 
     def stop(self) -> None:
         """Stop: the monitor."""

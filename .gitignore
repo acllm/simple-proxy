@@ -10,6 +10,12 @@ wheels/
 .venv
 
 
-# Claude superpowers
+# Claude & superpowers
 docs/plans
 .claude
+
+# Trae
+.trae/
+
+# Openspec
+openspec/
